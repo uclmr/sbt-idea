@@ -41,6 +41,14 @@ case class Directories(sources: Seq[File], resources: Seq[File], outDir: File) {
   def addRes(moreResources: Seq[File]): Directories = copy(resources = resources ++ moreResources)
 }
 
+case class ArtifactId(name:String, version:String, organization:String, scalaVersion:String) {
+  def toFullName = "SBT: %s:%s_%s:%s".format(organization,name,convertVersion(scalaVersion),version)
+  def convertVersion(version:String) = {
+    val Array(a1,a2,_) = version.split("\\.").map(_.toInt)
+    if (a1 >= 2 && a2 >= 10) "%d.%d".format(a1,a2) else version
+  }
+}
+
 case class DependencyProject(name: String, scope: IdeaLibrary.Scope)
 
 case class SubProjectInfo(baseDir: File, name: String,
@@ -49,7 +57,7 @@ case class SubProjectInfo(baseDir: File, name: String,
                           testDirs: Directories, libraries: Seq[IdeaModuleLibRef], scalaInstance: ScalaInstance,
                           ideaGroup: Option[String], webAppPath: Option[File], basePackage: Option[String],
                           packagePrefix: Option[String], extraFacets: NodeSeq, scalacOptions: Seq[String],
-                          includeScalaFacet: Boolean, androidSupport: AndroidSupport) {
+                          includeScalaFacet: Boolean, androidSupport: AndroidSupport,artifactId:ArtifactId) {
   lazy val languageLevel: String = {
     val version = scalaInstance.version
     val binaryScalaVersion = version.take(version.lastIndexOf('.'))

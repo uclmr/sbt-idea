@@ -35,12 +35,13 @@ object SbtIdeaPlugin extends Plugin {
 
   private val NoClassifiers = "no-classifiers"
   private val SbtClassifiers = "sbt-classifiers"
+  private val ReplaceLibsByModules = "replace-libs"
   private val NoFsc = "no-fsc"
   private val NoTypeHighlighting = "no-type-highlighting"
   private val NoSbtBuildModule = "no-sbt-build-module"
   private val DontDeleteExistingLibs = "dont-delete-existing-libs"
 
-  private val args = (Space ~> NoClassifiers | Space ~> SbtClassifiers | Space ~> NoFsc | Space ~> NoTypeHighlighting | Space ~> NoSbtBuildModule | Space ~> DontDeleteExistingLibs).*
+  private val args = (Space ~> NoClassifiers | Space ~> SbtClassifiers | Space ~> NoFsc | Space ~> NoTypeHighlighting | Space ~> NoSbtBuildModule | Space ~> DontDeleteExistingLibs | Space ~> ReplaceLibsByModules).*
 
   private lazy val ideaCommand = Command("gen-idea")(_ => args)(doCommand)
 
@@ -84,9 +85,14 @@ object SbtIdeaPlugin extends Plugin {
       settings.optionalSetting(ideaIgnoreModule, projectRef).getOrElse(false)
 
     val allProjectIds = projectList.values.map(_.id).toSet
-    val subProjects = projectList.collect {
+    val subProjectsRaw = projectList.collect {
       case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase)
     }.toList
+
+    val subProjects = if (args.contains(ReplaceLibsByModules))
+      replaceLibDependenciesWithModuleDependencies(state, subProjectsRaw)
+    else
+      subProjectsRaw
 
     val scalaInstances = subProjects.map(_.scalaInstance).distinct
     val scalaLibs = (sbtInstance :: scalaInstances).map(toIdeaLib(_))
@@ -148,6 +154,22 @@ object SbtIdeaPlugin extends Plugin {
     state
   }
 
+  def replaceLibDependenciesWithModuleDependencies(state:State, subprojects: List[SubProjectInfo]) = {
+    val name2project = subprojects.groupBy(_.artifactId.toFullName)
+    for (sub <- subprojects) yield {
+      //state.log.info(sub.artifactId.toString)
+      val libs = sub.libraries
+      //state.log.info(libs.map(_.library.name).mkString("  ","\n  ",""))
+      val (replaceable, nonreplacable) = libs.partition(l => name2project.isDefinedAt(l.library.name))
+      val subprojectsToUseInstead = replaceable.map(l => DependencyProject(name2project(l.library.name).head.name,l.config)).toList
+      val newSubProject = sub.copy(libraries = nonreplacable, dependencyProjects = sub.dependencyProjects ++ subprojectsToUseInstead)
+      for (lib <- replaceable) {
+        state.log.info("Replacing library %s with module %s.".format(lib.library.name,name2project(lib.library.name).head.name))
+      }
+      newSubProject
+    }
+  }
+
   def projectData(projectRef: ProjectRef, project: ResolvedProject, buildStruct: BuildStructure,
                   state: State, args: Seq[String], allProjectIds: Set[String], projectRoot: File): SubProjectInfo = {
 
@@ -157,7 +179,13 @@ object SbtIdeaPlugin extends Plugin {
     // IDEA project name, and for multi-module projects, the id as it must be consistent with the value of SubProjectInfo#dependencyProjects.
     val projectName = if (allProjectIds.size == 1) settings.setting(Keys.name, "Missing project name") else project.id
 
-    state.log.info("Creating IDEA module for project '" + projectName + "' ...")
+    //Needed for replacing dependencies with sub-projects
+    val artifactId = ArtifactId(
+      name = settings.setting(Keys.artifact, "Artifact not defined").name,
+      version = settings.setting(Keys.version, "Version not defined"),
+      organization = settings.setting(Keys.organization, "Org not defined"),
+      scalaVersion = settings.setting(Keys.scalaVersion, "Scala version not defined")
+    )
 
     val ideaGroup = settings.optionalSetting(ideaProjectGroup)
     val scalaInstance: ScalaInstance = settings.task(Keys.scalaInstance)
@@ -237,7 +265,7 @@ object SbtIdeaPlugin extends Plugin {
 
     SubProjectInfo(baseDirectory, projectName, dependencyProjects, classpathDeps, compileDirectories,
       testDirectories, dependencyLibs, scalaInstance, ideaGroup, None, basePackage, packagePrefix, extraFacets, scalacOptions,
-      includeScalaFacet, androidSupport)
+      includeScalaFacet, androidSupport,artifactId)
   }
 
 }
